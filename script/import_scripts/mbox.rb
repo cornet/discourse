@@ -3,9 +3,9 @@ require File.expand_path(File.dirname(__FILE__) + "/base.rb")
 class ImportScripts::Mbox < ImportScripts::Base
   # CHANGE THESE BEFORE RUNNING THE IMPORTER
 
-  BATCH_SIZE = 1000
+  BATCH_SIZE = 100
   CATEGORY_ID = 6
-  MBOX_DIR = "/tmp/mbox-input"
+  MBOX_DIR = "/Users/nathan/dev/google-group-crawler/freeagent_api/mbox"
   USER_INDEX_PATH = "#{MBOX_DIR}/user-index.json"
   TOPIC_INDEX_PATH = "#{MBOX_DIR}/topic-index.json"
   REPLY_INDEX_PATH = "#{MBOX_DIR}/replies-index.json"
@@ -19,10 +19,12 @@ class ImportScripts::Mbox < ImportScripts::Base
 
   def all_messages
 
-    files = Dir["#{MBOX_DIR}/*/*"]
+    files = Dir["#{MBOX_DIR}/**"]
 
     files.each_with_index do |f, idx|
       raw = File.read(f)
+      next if raw.empty?
+
       mail = Mail.read_from_string(raw)
       yield mail, f
       print_status(idx, files.size)
@@ -41,7 +43,7 @@ class ImportScripts::Mbox < ImportScripts::Base
     replies = []
 
     all_messages do |mail, filename|
-      users[mail.from.first] = mail[:from].display_names.first
+      users[clean_email(mail.from.first)] = mail[:from].display_names.first
 
       msg_id = mail['Message-ID'].to_s
       reply_to = mail['In-Reply-To'].to_s
@@ -60,6 +62,7 @@ class ImportScripts::Mbox < ImportScripts::Base
 
     replies.sort! {|a, b| a[:date] <=> b[:date]}
     topics.sort! {|a, b| a[:date] <=> b[:date]}
+
 
     # Replies without parents should be hoisted to topics
     to_hoist = []
@@ -88,6 +91,9 @@ class ImportScripts::Mbox < ImportScripts::Base
     replies.sort! {|a, b| a[:date] <=> b[:date]}
     topics.sort! {|a, b| a[:date] <=> b[:date]}
 
+    # Delete duplicate topics
+    topics.uniq! {|t| t[:id]}
+    replies.uniq! {|r| r[:id]}
 
     File.write(USER_INDEX_PATH, {users: users}.to_json)
     File.write(TOPIC_INDEX_PATH, {topics: topics}.to_json)
@@ -96,6 +102,10 @@ class ImportScripts::Mbox < ImportScripts::Base
 
   def clean_title(title)
     title.gsub(/^Re: */i, '')
+  end
+
+  def clean_email(email)
+    email.gsub(/%/,'_at_')
   end
 
   def clean_raw(raw)
@@ -111,6 +121,7 @@ class ImportScripts::Mbox < ImportScripts::Base
 
     batches(BATCH_SIZE) do |offset|
       users = user_keys[offset..offset+BATCH_SIZE-1]
+      puts users
       break if users.nil?
       next if all_records_exist? :users, users
 
@@ -147,11 +158,11 @@ class ImportScripts::Mbox < ImportScripts::Base
 
       create_posts(topics, total: topic_count, offset: offset) do |t|
         raw_email = File.read(t['file'])
-        receiver = Email::Receiver.new(raw_email, skip_sanity_check: true)
+        receiver = Email::Receiver.new(raw_email) #, skip_sanity_check: true)
         mail = Mail.read_from_string(raw_email)
         mail.body
 
-        selected = receiver.select_body(mail)
+        selected = receiver.select_body #(mail)
         next unless selected
 
         raw = selected.force_encoding(selected.encoding).encode("UTF-8")
@@ -190,11 +201,11 @@ class ImportScripts::Mbox < ImportScripts::Base
         next unless topic_id
 
         raw_email = File.read(p['file'])
-        receiver = Email::Receiver.new(raw_email, skip_sanity_check: true)
+        receiver = Email::Receiver.new(raw_email) #, skip_sanity_check: true)
         mail = Mail.read_from_string(raw_email)
         mail.body
 
-        selected = receiver.select_body(mail)
+        selected = receiver.select_body #(mail)
         raw = selected.force_encoding(selected.encoding).encode("UTF-8")
 
         { id: id,
